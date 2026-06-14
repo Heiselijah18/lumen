@@ -1,9 +1,11 @@
 import os
 import requests
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-sonnet-4-6"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MODEL = "gemini-2.0-flash"
+GEMINI_API_URL = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+)
 
 SYSTEM_PROMPT = """You are Lumen, a warm and emotionally present AI companion for people who may be experiencing depression, loneliness, or emotional difficulty. You act like a caring, attentive friend who is always available to listen.
 
@@ -38,30 +40,45 @@ def get_lumen_reply(history: list[dict]) -> str:
     """
     history: list of {"role": "user"|"assistant", "content": "..."}
     Returns Lumen's reply text.
+
+    Uses Google's Gemini API (has a free tier). Get a key at
+    https://aistudio.google.com/app/apikey and set it as GEMINI_API_KEY.
     """
-    if not ANTHROPIC_API_KEY:
+    if not GEMINI_API_KEY:
         return (
             "Lumen isn't connected to its AI service yet "
-            "(the server is missing an ANTHROPIC_API_KEY). "
+            "(the server is missing a GEMINI_API_KEY). "
             "I'm still here once that's set up!"
         )
 
+    # Gemini uses "user"/"model" roles instead of "user"/"assistant",
+    # and takes "contents" with "parts" instead of a flat messages list.
+    contents = [
+        {
+            "role": "model" if m["role"] == "assistant" else "user",
+            "parts": [{"text": m["content"]}],
+        }
+        for m in history
+    ]
+
     response = requests.post(
-        ANTHROPIC_API_URL,
-        headers={
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
+        GEMINI_API_URL,
+        params={"key": GEMINI_API_KEY},
+        headers={"content-type": "application/json"},
         json={
-            "model": MODEL,
-            "max_tokens": 600,
-            "system": SYSTEM_PROMPT,
-            "messages": history,
+            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": contents,
+            "generationConfig": {"maxOutputTokens": 400},
         },
         timeout=30,
     )
     response.raise_for_status()
     data = response.json()
-    text = "\n".join(block.get("text", "") for block in data.get("content", []))
-    return text.strip() or "I'm here, even if I'm a little lost for words right now."
+
+    try:
+        parts = data["candidates"][0]["content"]["parts"]
+        text = "".join(p.get("text", "") for p in parts).strip()
+    except (KeyError, IndexError):
+        text = ""
+
+    return text or "I'm here, even if I'm a little lost for words right now."
